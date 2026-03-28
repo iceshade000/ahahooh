@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ahahooh"
+version = "0.1.0"
+description = "Claude Code memory enhancement tool"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.0.0",
+    "click>=8.0",
+]
+
+[project.scripts]
+ahahooh = "ahahooh.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ahahooh"]
