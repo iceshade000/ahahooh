@@ -191,7 +191,7 @@ def init():
     click.echo("Done! Launching Claude Code ...")
     sys.stdout.flush()
     try:
-        subprocess.run(["claude"], cwd=str(project_root))
+        subprocess.run(["claude"], cwd=str(project_root), shell=True)
     except FileNotFoundError:
         click.echo("Error: 'claude' command not found. Please install Claude Code CLI first.")
     except KeyboardInterrupt:
