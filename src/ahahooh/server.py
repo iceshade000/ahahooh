@@ -135,8 +135,16 @@ def get_resume_context() -> str:
 
     Call this at the start of a new session if .ahahooh/ exists in the project.
     Returns active plans, recent conversations, and recent execution records.
+    Also rebuilds the index to ensure it's up-to-date (handles cases where the
+    previous session was terminated by closing the terminal window).
     """
     root = _get_root()
+
+    # Rebuild index as a safety net — the Stop hook may not fire if the user
+    # closed the terminal window directly instead of pressing Ctrl+C twice.
+    from .index import build_index
+    build_index(root)
+
     ctx = _get_resume_context(root)
 
     lines = ["# Session Resume Context\n"]

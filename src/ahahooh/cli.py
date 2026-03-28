@@ -188,7 +188,14 @@ def init():
     click.echo("  Created slash commands in .claude/commands/")
 
     click.echo("")
-    click.echo("Done! Ahahooh is ready. Start Claude Code to begin capturing memory.")
+    click.echo("Done! Launching Claude Code ...")
+    sys.stdout.flush()
+    try:
+        subprocess.run(["claude"], cwd=str(project_root))
+    except FileNotFoundError:
+        click.echo("Error: 'claude' command not found. Please install Claude Code CLI first.")
+    except KeyboardInterrupt:
+        pass
 
 
 @cli.command()
