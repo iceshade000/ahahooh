@@ -7,9 +7,18 @@
       "Bash(pip install:*)",
       "Bash(python:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(powershell -Command \"[Environment]::GetEnvironmentVariable\\(''Path'', ''User''\\)\")",
+      "Bash(powershell -File:*)",
+      "Bash(tr:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File D:/claudecode/ahahooh/add_path.ps1)"
     ]
   },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "ahahooh"
+  ],
   "hooks": {
     "PostToolUse": [
       {
