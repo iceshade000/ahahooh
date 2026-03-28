@@ -538,14 +538,20 @@ def get_resume_context(project_root: Path) -> dict:
                 "file_path": c["file_path"],
             })
 
-        # Recent execution records
+        # Recent execution records (5, deduplicated by tool+file/command)
         records = conn.execute(
             """SELECT timestamp, tool_name, file_path, command, input_summary, response_summary, record_file
-               FROM execution_records ORDER BY timestamp DESC LIMIT 10"""
+               FROM execution_records ORDER BY timestamp DESC LIMIT 20"""
         ).fetchall()
 
+        seen = set()
         recent_records = []
         for r in records:
+            desc = r["file_path"] or r["command"] or ""
+            key = f"{r['tool_name']}:{desc}"
+            if key in seen:
+                continue
+            seen.add(key)
             recent_records.append({
                 "timestamp": r["timestamp"],
                 "tool_name": r["tool_name"],
@@ -554,6 +560,8 @@ def get_resume_context(project_root: Path) -> dict:
                 "summary": r["input_summary"] or r["response_summary"],
                 "record_file": r["record_file"],
             })
+            if len(recent_records) >= 5:
+                break
 
         return {
             "active_plans": active_plans,

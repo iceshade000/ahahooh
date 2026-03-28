@@ -147,41 +147,35 @@ def get_resume_context() -> str:
 
     ctx = _get_resume_context(root)
 
-    lines = ["# Session Resume Context\n"]
+    # Return compact structured text — Claude should output this verbatim
+    lines = []
 
-    # Active plans
-    lines.append("## Active Plans")
     plans = ctx.get("active_plans", [])
     if plans:
+        lines.append("Plans:")
         for p in plans:
-            lines.append(f"- [{p['plan_id']}] \"{p['goal']}\" - {p['pending']} pending, {p['completed']} completed")
-    else:
-        lines.append("(none)")
-    lines.append("")
+            lines.append(f"- {p['plan_id']}: \"{p['goal']}\" ({p['pending']} pending, {p['completed']} done)")
 
-    # Recent conversations
-    lines.append("## Recent Conversations")
     convs = ctx.get("recent_conversations", [])
     if convs:
-        for c in convs:
-            ts = c["timestamp"][:16].replace("T", " ")
-            lines.append(f"- [{ts}] {c['summary']}")
-            for d in c.get("key_decisions", []):
-                lines.append(f"  - Decision: {d}")
-    else:
-        lines.append("(none)")
-    lines.append("")
+        lines.append("Recent talks:")
+        for c in convs[:3]:
+            ts = c["timestamp"][:10]
+            decisions = ", ".join(c.get("key_decisions", []))
+            line = f"- [{ts}] {c['summary']}"
+            if decisions:
+                line += f" -- decided: {decisions}"
+            lines.append(line)
 
-    # Recent records
-    lines.append("## Recent Executions")
     records = ctx.get("recent_records", [])
     if records:
+        lines.append("Recent actions:")
         for r in records:
-            ts = r["timestamp"][:16].replace("T", " ")
             desc = r.get("file_path") or r.get("command") or r.get("summary", "")
-            lines.append(f"- [{ts}] {r['tool_name']}: {desc}")
-    else:
-        lines.append("(none)")
+            lines.append(f"- {r['tool_name']}: {desc}")
+
+    if not lines:
+        return "No previous session data found."
 
     return "\n".join(lines)
 
