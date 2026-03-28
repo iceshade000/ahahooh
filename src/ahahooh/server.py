@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 
 from . import config
 from .storage import (
-    get_resume_context,
+    get_resume_context as _get_resume_context,
     save_conversation as _save_conversation,
     save_plan as _save_plan,
     search as _search,
