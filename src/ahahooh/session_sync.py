@@ -93,6 +93,19 @@ def _tail_sentences(text: str, max_chars: int = 300) -> str:
     return tail.strip()
 
 
+def _truncate_clean(text: str, max_chars: int) -> str:
+    """Truncate text from the end, breaking at a sentence boundary when possible."""
+    if len(text) <= max_chars:
+        return text.strip()
+    head = text[:max_chars]
+    # Try to cut at a sentence/paragraph boundary in the last 40%
+    for sep in (". ", "。", "! ", "? ", "\n", "; "):
+        idx = head.rfind(sep)
+        if idx > max_chars * 0.6:
+            return head[:idx + len(sep)].strip()
+    return head.rstrip()
+
+
 def parse_session(jsonl_path: Path) -> dict | None:
     """Parse one session JSONL. Returns dict with messages or None."""
     user_msgs = []
@@ -145,16 +158,32 @@ def parse_session(jsonl_path: Path) -> dict | None:
 
 
 def build_summary(parsed: dict) -> str:
-    """Build a summary from parsed session.
+    """Build structured intent→result summary from parsed session.
 
-    Keeps all user messages (they're short and represent intent).
-    Each assistant reply is already tail-extracted by _tail_sentences.
+    Format: Intent: <goal> | Steps: <key turns> | Result: <conclusion>
+    Compact but FTS-searchable.
     """
+    user_msgs = parsed["user_messages"]
+    assistant_msgs = parsed["assistant_messages"]
+
+    # Intent: first user message (the main request)
+    intent = _truncate_clean(user_msgs[0], 200) if user_msgs else ""
+
+    # Result: last assistant message (final conclusion)
+    result = _truncate_clean(assistant_msgs[-1], 300) if assistant_msgs else ""
+
     parts = []
-    if parsed["user_messages"]:
-        parts.append("User: " + " | ".join(parsed["user_messages"]))
-    if parsed["assistant_messages"]:
-        parts.append("Result: " + " | ".join(parsed["assistant_messages"]))
+    if intent:
+        parts.append(f"Intent: {intent}")
+
+    # Middle steps: brief user messages (evolving requests)
+    if len(user_msgs) > 1:
+        steps = [_truncate_clean(m, 80) for m in user_msgs[1:6]]
+        parts.append(f"Steps: {' | '.join(steps)}")
+
+    if result:
+        parts.append(f"Result: {result}")
+
     return " | ".join(parts) if parts else ""
 
 
@@ -252,6 +281,55 @@ def sync_sessions(project_root: Path) -> int:
                 topics=topics,
                 session_id=session_id,
             )
+            count += 1
+
+    return count
+
+
+def recompact_summaries(project_root: Path) -> int:
+    """One-time migration: re-generate old-format summaries using new structured format.
+
+    Only processes summaries starting with "User:" (old format).
+    Once all are migrated this becomes a no-op. Returns count migrated.
+    """
+    claude_project_dir = _get_claude_project_dir(project_root)
+    if claude_project_dir is None:
+        return 0
+
+    db_path = config.get_db_path(project_root)
+    if not db_path.exists():
+        return 0
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT session_id FROM conversations"
+            " WHERE session_id != '' AND summary LIKE 'User: %'"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return 0
+
+    count = 0
+    for (session_id,) in rows:
+        jsonl_path = claude_project_dir / f"{session_id}.jsonl"
+        if not jsonl_path.exists():
+            continue
+        parsed = parse_session(jsonl_path)
+        if parsed is None:
+            continue
+        summary = build_summary(parsed)
+        if not summary:
+            continue
+        topics = extract_topics(parsed)
+        if update_conversation_by_session(
+            project_root=project_root,
+            session_id=session_id,
+            summary=summary,
+            topics=topics,
+        ):
             count += 1
 
     return count

@@ -58,8 +58,14 @@ def build_index(project_root: Path) -> None:
             ts = c["timestamp"][:16].replace("T", " ")
             # Extract date part for short display
             date_part = ts[:10]
-            summary_short = c["summary"][:80] + ("..." if len(c["summary"]) > 80 else "")
-            lines.append(f"- [{date_part}] {summary_short} -> {c['file_path']}")
+            summary = c["summary"]
+            # Extract intent from structured format
+            if summary.startswith("Intent: "):
+                display = summary[8:].split(" | ")[0]
+            else:
+                display = summary
+            display = display[:80] + ("..." if len(display) > 80 else "")
+            lines.append(f"- [{date_part}] {display} -> {c['file_path']}")
     else:
         lines.append("- (none)")
     lines.append("")

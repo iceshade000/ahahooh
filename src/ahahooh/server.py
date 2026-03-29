@@ -140,7 +140,13 @@ def get_resume_context() -> str:
     """
     root = _get_root()
 
-    # Sync plan-mode files that bypassed the Write tool
+    # Sync new/updated sessions and plan files before rebuilding index
+    from .session_sync import sync_sessions, recompact_summaries
+    sync_sessions(root)
+
+    # One-time migration: re-generate old-format summaries to new structured format
+    recompact_summaries(root)
+
     from .plan_sync import sync_plans
     sync_plans(root)
 
@@ -151,22 +157,47 @@ def get_resume_context() -> str:
 
     ctx = _get_resume_context(root)
 
-    # Return compact structured text — Claude should output this verbatim
+    return _format_resume_summary(ctx)
+
+
+def _format_resume_summary(ctx: dict) -> str:
+    """Format resume context with 1500-char hard limit."""
     lines = []
 
     plans = ctx.get("active_plans", [])
     if plans:
         lines.append("Plans:")
         for p in plans:
-            lines.append(f"- {p['plan_id']}: \"{p['goal']}\" ({p['pending']} pending, {p['completed']} done)")
+            lines.append(
+                f"- {p['plan_id']}: \"{p['goal']}\""
+                f" ({p['pending']} pending, {p['completed']} done)"
+            )
 
     convs = ctx.get("recent_conversations", [])
     if convs:
         lines.append("Recent talks:")
         for c in convs[:3]:
             ts = c["timestamp"][:10]
+            summary = c["summary"]
+
+            # Extract structured parts from new format
+            intent = ""
+            result = ""
+            for part in summary.split(" | "):
+                if part.startswith("Intent: "):
+                    intent = part[8:]
+                elif part.startswith("Result: "):
+                    result = part[8:]
+
+            if intent:
+                line = f"- [{ts}] {intent[:150]}"
+                if result:
+                    line += f" => {result[:150]}"
+            else:
+                # Fallback for old format
+                line = f"- [{ts}] {summary[:200]}"
+
             decisions = ", ".join(c.get("key_decisions", []))
-            line = f"- [{ts}] {c['summary']}"
             if decisions:
                 line += f" -- decided: {decisions}"
             lines.append(line)
@@ -181,7 +212,13 @@ def get_resume_context() -> str:
     if not lines:
         return "No previous session data found."
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+
+    # Hard limit at 1500 chars
+    if len(text) > 1500:
+        text = text[:1497] + "..."
+
+    return text
 
 
 if __name__ == "__main__":
