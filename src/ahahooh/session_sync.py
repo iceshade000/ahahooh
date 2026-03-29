@@ -14,7 +14,7 @@ import sqlite3
 from pathlib import Path
 
 from . import config
-from .storage import save_conversation
+from .storage import save_conversation, update_conversation_by_session
 
 
 def _get_claude_project_dir(project_root: Path) -> Path | None:
@@ -170,54 +170,88 @@ def extract_topics(parsed: dict) -> list[str]:
     return [kw for kw in keywords if kw in text][:5]
 
 
-def _get_indexed_session_ids(project_root: Path) -> set[str]:
-    """Get session IDs already in ahahooh."""
+def _get_synced_sessions(project_root: Path) -> dict[str, float]:
+    """Get session IDs already in ahahooh, mapped to their last sync time (epoch).
+
+    Returns dict of session_id -> timestamp epoch (parsed from DB timestamp field).
+    """
     db_path = config.get_db_path(project_root)
     if not db_path.exists():
-        return set()
+        return {}
     conn = sqlite3.connect(str(db_path))
     try:
         rows = conn.execute(
-            "SELECT DISTINCT session_id FROM conversations WHERE session_id != ''"
+            "SELECT session_id, timestamp FROM conversations WHERE session_id != ''"
         ).fetchall()
-        return {r[0] for r in rows}
+        result = {}
+        for session_id, ts_str in rows:
+            # Parse ISO timestamp to epoch for comparison with file mtime
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(ts_str)
+                epoch = dt.timestamp()
+            except (ValueError, TypeError):
+                epoch = 0.0
+            # Keep the latest timestamp if multiple records share a session_id
+            if session_id not in result or epoch > result[session_id]:
+                result[session_id] = epoch
+        return result
     finally:
         conn.close()
 
 
 def sync_sessions(project_root: Path) -> int:
-    """Sync all new Claude Code sessions into ahahooh.
+    """Sync all new and updated Claude Code sessions into ahahooh.
 
-    Scans JSONL files, skips sessions already indexed,
-    parses and saves summaries. Returns count of new sessions.
+    Scans JSONL files. New sessions are inserted; sessions whose JSONL
+    has been modified since last sync (e.g. resumed sessions with new
+    messages) are re-parsed and updated. Returns count of changes.
     """
     claude_project_dir = _get_claude_project_dir(project_root)
     if claude_project_dir is None:
         return 0
 
-    indexed = _get_indexed_session_ids(project_root)
+    synced = _get_synced_sessions(project_root)
     count = 0
 
     for jsonl_path in sorted(claude_project_dir.glob("*.jsonl")):
         session_id = jsonl_path.stem
-        if session_id in indexed:
-            continue
+        file_mtime = jsonl_path.stat().st_mtime
 
-        parsed = parse_session(jsonl_path)
-        if parsed is None:
-            continue
-
-        summary = build_summary(parsed)
-        if not summary:
-            continue
-
-        topics = extract_topics(parsed)
-        save_conversation(
-            project_root=project_root,
-            summary=summary,
-            topics=topics,
-            session_id=session_id,
-        )
-        count += 1
+        if session_id in synced:
+            # Already synced — check if JSONL has new content
+            if file_mtime <= synced[session_id]:
+                continue
+            # File was modified after last sync (resumed session)
+            parsed = parse_session(jsonl_path)
+            if parsed is None:
+                continue
+            summary = build_summary(parsed)
+            if not summary:
+                continue
+            topics = extract_topics(parsed)
+            if update_conversation_by_session(
+                project_root=project_root,
+                session_id=session_id,
+                summary=summary,
+                topics=topics,
+            ):
+                count += 1
+        else:
+            # New session
+            parsed = parse_session(jsonl_path)
+            if parsed is None:
+                continue
+            summary = build_summary(parsed)
+            if not summary:
+                continue
+            topics = extract_topics(parsed)
+            save_conversation(
+                project_root=project_root,
+                summary=summary,
+                topics=topics,
+                session_id=session_id,
+            )
+            count += 1
 
     return count

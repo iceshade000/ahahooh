@@ -275,6 +275,67 @@ def save_conversation(
     return filename
 
 
+def update_conversation_by_session(
+    project_root: Path,
+    session_id: str,
+    summary: str,
+    topics: list[str] | None = None,
+) -> bool:
+    """Update an existing conversation record identified by session_id.
+
+    Rewrites both the markdown file and the SQLite row. Returns True if updated.
+    """
+    topics = topics or []
+    ts = _now_iso()
+
+    conn = _get_conn(project_root)
+    try:
+        row = conn.execute(
+            "SELECT id, file_path FROM conversations WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return False
+
+        row_id = row["id"]
+        old_file = row["file_path"]
+
+        # Update markdown file
+        conv_dir = config.get_conversations_dir(project_root)
+        conv_path = conv_dir / old_file
+        if conv_path.exists():
+            md_lines = [
+                "# Conversation Summary",
+                "",
+                f"- **Timestamp**: {ts}",
+                f"- **Session**: {session_id}",
+                "",
+                "## Summary",
+                "",
+                summary,
+                "",
+            ]
+            if topics:
+                md_lines.append("## Topics")
+                md_lines.append("")
+                for t in topics:
+                    md_lines.append(f"- {t}")
+                md_lines.append("")
+            conv_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+        # Update DB row (triggers conv_au keep FTS in sync)
+        conn.execute(
+            """UPDATE conversations
+               SET timestamp=?, summary=?, topics=?
+               WHERE id=?""",
+            (ts, summary, json.dumps(topics), row_id),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Plans
 # ---------------------------------------------------------------------------
