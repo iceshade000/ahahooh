@@ -8,6 +8,7 @@ from fastmcp import FastMCP
 
 from . import config
 from .storage import (
+    _get_conn as _storage_get_conn,
     get_resume_context as _get_resume_context,
     save_conversation as _save_conversation,
     save_plan as _save_plan,
@@ -98,10 +99,11 @@ def list_plans() -> str:
     Returns a compact list of plan IDs and goals, useful for choosing which plan to focus on.
     """
     root = _get_root()
-    conn = _get_conn(root)
+    import json as _json
+    from .storage import _get_conn as _storage_get_conn
+    conn = _storage_get_conn(root)
+    # _get_conn already sets row_factory=sqlite3.Row, so dict-style access works
     try:
-        from .storage import _get_conn as _storage_get_conn
-        conn = _storage_get_conn(root)
         rows = conn.execute(
             "SELECT plan_id, goal, tasks_json FROM plans ORDER BY timestamp DESC"
         ).fetchall()
@@ -113,8 +115,7 @@ def list_plans() -> str:
 
     lines = []
     for r in rows:
-        import json
-        tasks = json.loads(r["tasks_json"])
+        tasks = _json.loads(r["tasks_json"])
         completed = sum(1 for t in tasks if t.get("status") == "completed")
         total = len(tasks)
         marker = "DONE" if completed == total else f"{completed}/{total}"
