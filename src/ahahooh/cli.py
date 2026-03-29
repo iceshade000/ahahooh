@@ -89,6 +89,9 @@ def _init_hooks(project_root: Path) -> None:
                     "command": "python -m ahahooh.hook_handler --stop"
                 }]
             }]
+        },
+        "env": {
+            "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
         }
     }
 
@@ -98,6 +101,10 @@ def _init_hooks(project_root: Path) -> None:
         if "hooks" not in existing:
             existing["hooks"] = {}
         existing["hooks"].update(hook_config["hooks"])
+        # Merge env
+        if "env" not in existing:
+            existing["env"] = {}
+        existing["env"].update(hook_config["env"])
         hook_config = existing
     else:
         settings_path.write_text(json.dumps(hook_config, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
