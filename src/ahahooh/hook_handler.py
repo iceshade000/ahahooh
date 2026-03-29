@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import config
-from .storage import save_execution_record, save_plan
+from .storage import save_execution_record, save_plan, save_conversation
 
 
 def _truncate(text: str, max_len: int = 500) -> str:
@@ -160,11 +160,15 @@ def handle_post_tool_use(data: dict) -> None:
                 )
 
 
-def handle_stop() -> None:
-    """Handle Stop hook - rebuild index."""
+def handle_stop(data: dict | None = None) -> None:
+    """Handle Stop hook - sync sessions and rebuild index."""
     project_root = config.find_project_root()
     if project_root is None:
         return
+
+    # Sync new sessions from Claude Code's own history
+    from .session_sync import sync_sessions
+    sync_sessions(project_root)
 
     from .index import build_index
     build_index(project_root)
@@ -173,20 +177,23 @@ def handle_stop() -> None:
 def main():
     is_stop = "--stop" in sys.argv
 
-    if is_stop:
-        handle_stop()
-        return
-
     # Read JSON from stdin
     try:
         raw = sys.stdin.read()
         if not raw.strip():
+            if is_stop:
+                handle_stop(None)
             return
         data = json.loads(raw)
     except (json.JSONDecodeError, EOFError):
+        if is_stop:
+            handle_stop(None)
         return
 
-    handle_post_tool_use(data)
+    if is_stop:
+        handle_stop(data)
+    else:
+        handle_post_tool_use(data)
 
 
 if __name__ == "__main__":
