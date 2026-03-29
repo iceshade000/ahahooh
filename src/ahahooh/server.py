@@ -223,11 +223,17 @@ def _format_resume_summary(ctx: dict) -> str:
         lines.append("Recent actions:")
         for r in records:
             desc = r.get("file_path") or r.get("command") or ""
+            # Truncate multi-line commands to first line + indicator
+            first_line = desc.split("\n", 1)[0]
+            if len(first_line) > 100:
+                first_line = first_line[:97] + "..."
+            if "\n" in desc:
+                first_line += " ..."
             count = r.get("count", 1)
             if count > 1:
-                lines.append(f"- {r['tool_name']}: {desc} ({count}x, last: {r.get('last_action', '')[:60]})")
+                lines.append(f"- {r['tool_name']}: {first_line} ({count}x, last: {r.get('last_action', '')[:60]})")
             else:
-                lines.append(f"- {r['tool_name']}: {desc}")
+                lines.append(f"- {r['tool_name']}: {first_line}")
 
     if not lines:
         return "No previous session data found."
