@@ -43,6 +43,8 @@ ahahooh init
 
 初始化完成后会自动启动 Claude Code，无需手动运行 `claude` 命令。
 
+> **性能修复**：`ahahooh init` 会自动在 `.claude/settings.local.json` 中设置 `CLAUDE_CODE_ATTRIBUTION_HEADER=0`，修复 Claude Code 的缓存 hash bug，避免使用 API Key 时生成速度暴跌的问题。
+
 这会生成以下文件：
 
 ```
