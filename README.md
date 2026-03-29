@@ -76,7 +76,7 @@ ahahooh init
 
 **Plan Mode 自动捕获**：当使用 Claude Code 的 `/plan` 模式（Shift+Tab）编写计划时，ahahooh 会自动检测对 `~/.claude/plans/` 的写入，提取计划目标和任务列表，保存为独立计划。同一份计划多次编辑会自动更新，不会重复创建。由于 plan mode 内部写入计划文件时绕过了 Write tool，PostToolUse hook 可能无法触发，因此 Stop hook 和 `get_resume_context` 也会扫描 `~/.claude/plans/`，补捕遗漏的计划文件。
 
-**会话历史自动同步**：Claude Code 本身会将完整的会话历史保存在 `~/.claude/projects/<slug>/<session-id>.jsonl`。ahahooh 在 Stop hook 中自动解析这些 JSONL 文件，提取用户首条消息和助手最后回复生成摘要，同步到 `.ahahooh/data/conversations/`。已同步的会话不会重复处理。即使关闭终端窗口导致 Stop hook 未触发，下次 `/aharesume` 时也会自动同步新会话。
+**会话历史自动同步**：Claude Code 本身会将完整的会话历史保存在 `~/.claude/projects/<slug>/<session-id>.jsonl`。ahahooh 在 Stop hook 中自动解析这些 JSONL 文件，保留所有用户消息，提取每条助手回复的末尾部分（基于规则，不消耗 token），合并生成摘要，同步到 `.ahahooh/data/conversations/`。已同步的会话不会重复处理。即使关闭终端窗口导致 Stop hook 未触发，下次 `/aharesume` 时也会自动同步新会话。
 
 ### MCP 工具
 
