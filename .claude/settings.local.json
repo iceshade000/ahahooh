@@ -12,7 +12,11 @@
       "Bash(powershell -Command \"[Environment]::GetEnvironmentVariable\\(''Path'', ''User''\\)\")",
       "Bash(powershell -File:*)",
       "Bash(tr:*)",
-      "Bash(powershell -ExecutionPolicy Bypass -File D:/claudecode/ahahooh/add_path.ps1)"
+      "Bash(powershell -ExecutionPolicy Bypass -File D:/claudecode/ahahooh/add_path.ps1)",
+      "mcp__ahahooh__get_resume_context",
+      "mcp__ahahooh__search_memory",
+      "mcp__ahahooh__save_conversation",
+      "mcp__ahahooh__save_plan"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -41,5 +45,8 @@
         ]
       }
     ]
+  },
+  "env": {
+    "CLAUDE_CODE_ATTRIBUTION_HEADER": "0"
   }
 }

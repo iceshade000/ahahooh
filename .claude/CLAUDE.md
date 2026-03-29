@@ -12,7 +12,7 @@ This project uses Ahahooh for persistent memory across Claude Code sessions.
 
 ### Session resume
 - At the start of a new session, check if `.ahahooh/` exists. If it does, call `get_resume_context` to restore context.
-- Use `/resume` command to get a structured summary of previous work.
+- Use `/aharesume` command to get a structured summary of previous work.
 
 ### Rules
 - Memory files in `.ahahooh/data/` are immutable records. Never modify them.

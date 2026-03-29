@@ -131,7 +131,13 @@ def _inject_claude_md(project_root: Path) -> None:
     if claude_md_path.exists():
         existing = claude_md_path.read_text(encoding="utf-8")
         if "Ahahooh Memory System" in existing:
-            click.echo("  CLAUDE.md already contains Ahahooh instructions, skipping")
+            # Fix old /resume reference if present
+            if "/resume" in existing and "/aharesume" not in existing:
+                existing = existing.replace("Use `/resume` command", "Use `/aharesume` command")
+                claude_md_path.write_text(existing, encoding="utf-8")
+                click.echo("  Updated CLAUDE.md: /resume -> /aharesume")
+            else:
+                click.echo("  CLAUDE.md already contains Ahahooh instructions, skipping")
             return
         claude_md_path.write_text(existing.rstrip() + "\n" + fragment, encoding="utf-8")
     else:
@@ -153,6 +159,13 @@ def _init_commands(project_root: Path) -> None:
 
     for cmd_file in template_commands.glob("*.md"):
         dest = commands_dir / cmd_file.name
+        if not dest.exists():
+            shutil.copy2(cmd_file, dest)
+
+    # Remove old resume.md if it exists (renamed to aharesume)
+    old_resume = commands_dir / "resume.md"
+    if old_resume.exists():
+        old_resume.unlink()
         if not dest.exists():
             shutil.copy2(cmd_file, dest)
 
