@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from . import config
-from .storage import save_execution_record
+from .storage import save_execution_record, save_plan
 
 
 def _truncate(text: str, max_len: int = 500) -> str:
@@ -81,6 +81,37 @@ def _extract_tool_info(data: dict) -> dict:
     }
 
 
+def _is_plan_file(file_path: str) -> bool:
+    """Check if a file path is a Claude Code plan file."""
+    # Claude Code writes plans to ~/.claude/plans/<slug>.md
+    # On Windows this could be C:\Users\<user>\.claude\plans\<slug>.md
+    parts = Path(file_path).parts
+    return ".claude" in parts and "plans" in parts
+
+
+def _extract_plan_from_content(content: str) -> dict:
+    """Extract goal and tasks from plan markdown content."""
+    lines = content.strip().split("\n")
+    goal = ""
+    tasks = []
+
+    for line in lines:
+        line = line.strip()
+        # First heading or non-empty line is likely the goal
+        if not goal and line and not line.startswith("-") and not line.startswith("*"):
+            goal = line.lstrip("#").strip()
+        # Bullet points are tasks
+        if line.startswith("- ") or line.startswith("* "):
+            task_text = line.lstrip("-* ").strip()
+            if task_text:
+                tasks.append({"description": task_text, "status": "pending"})
+
+    if not goal:
+        goal = "Untitled plan"
+
+    return {"goal": goal, "tasks": tasks}
+
+
 def handle_post_tool_use(data: dict) -> None:
     """Handle PostToolUse hook."""
     project_root = config.find_project_root()
@@ -103,6 +134,30 @@ def handle_post_tool_use(data: dict) -> None:
         response_summary=info["response_summary"],
         session_id=session_id,
     )
+
+    # Capture plan mode writes: if Write/Edit targets ~/.claude/plans/, save to ahahooh
+    if info["tool_name"] in ("Write", "Edit") and info["file_path"]:
+        if _is_plan_file(info["file_path"]):
+            # For Write, content is in tool_input.content
+            # For Edit, read the file on disk to get the latest full content
+            if info["tool_name"] == "Write":
+                content = data.get("tool_input", {}).get("content", "")
+            else:
+                try:
+                    content = Path(info["file_path"]).read_text(encoding="utf-8")
+                except (OSError, FileNotFoundError):
+                    content = ""
+            if content and content.strip():
+                plan = _extract_plan_from_content(content)
+                # Use the plan file stem as plan_id for uniqueness and upsert
+                plan_id = f"planmode_{Path(info['file_path']).stem}"
+                save_plan(
+                    project_root=project_root,
+                    goal=plan["goal"],
+                    tasks=plan["tasks"],
+                    plan_id=plan_id,
+                    session_id=session_id,
+                )
 
 
 def handle_stop() -> None:
