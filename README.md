@@ -73,6 +73,8 @@ ahahooh init
 
 `ahahooh init` 配置了 Claude Code 的 PostToolUse Hook。启动 Claude Code 后，所有 Write、Edit、Bash 操作会被自动记录到 `.ahahooh/data/records/`，无需任何手动操作。
 
+**Plan Mode 自动捕获**：当使用 Claude Code 的 `/plan` 模式（Shift+Tab）编写计划时，ahahooh 会自动检测对 `~/.claude/plans/` 的写入，提取计划目标和任务列表，保存为独立计划。同一份计划多次编辑会自动更新，不会重复创建。
+
 ### MCP 工具
 
 Claude Code 启动时会自动加载 `.mcp.json` 中注册的 MCP Server，获得以下工具：
