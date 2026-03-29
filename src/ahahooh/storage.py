@@ -137,6 +137,8 @@ def _get_conn(project_root: Path) -> sqlite3.Connection:
     db_path = config.get_db_path(project_root)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    # Ensure schema exists (idempotent via IF NOT EXISTS)
+    conn.executescript(_SCHEMA)
     return conn
 
 
