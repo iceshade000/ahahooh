@@ -170,6 +170,10 @@ def handle_stop(data: dict | None = None) -> None:
     from .session_sync import sync_sessions
     sync_sessions(project_root)
 
+    # Sync plan-mode files that bypassed the Write tool
+    from .plan_sync import sync_plans
+    sync_plans(project_root)
+
     from .index import build_index
     build_index(project_root)
 

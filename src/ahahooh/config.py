@@ -59,3 +59,8 @@ def get_plans_dir(project_root: Path) -> Path:
 
 def get_index_path(project_root: Path) -> Path:
     return get_data_dir(project_root) / INDEX_FILE
+
+
+def get_claude_plans_dir() -> Path:
+    """Get the Claude Code plans directory (~/.claude/plans)."""
+    return Path.home() / ".claude" / "plans"

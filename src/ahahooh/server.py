@@ -140,6 +140,10 @@ def get_resume_context() -> str:
     """
     root = _get_root()
 
+    # Sync plan-mode files that bypassed the Write tool
+    from .plan_sync import sync_plans
+    sync_plans(root)
+
     # Rebuild index as a safety net — the Stop hook may not fire if the user
     # closed the terminal window directly instead of pressing Ctrl+C twice.
     from .index import build_index
