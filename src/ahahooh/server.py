@@ -92,6 +92,38 @@ def update_plan_task(
 
 
 @mcp.tool()
+def list_plans() -> str:
+    """List all plans with their status.
+
+    Returns a compact list of plan IDs and goals, useful for choosing which plan to focus on.
+    """
+    root = _get_root()
+    conn = _get_conn(root)
+    try:
+        from .storage import _get_conn as _storage_get_conn
+        conn = _storage_get_conn(root)
+        rows = conn.execute(
+            "SELECT plan_id, goal, tasks_json FROM plans ORDER BY timestamp DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return "No plans found."
+
+    lines = []
+    for r in rows:
+        import json
+        tasks = json.loads(r["tasks_json"])
+        completed = sum(1 for t in tasks if t.get("status") == "completed")
+        total = len(tasks)
+        marker = "DONE" if completed == total else f"{completed}/{total}"
+        lines.append(f"- {r['plan_id']}: \"{r['goal'][:80]}\" [{marker}]")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def search_memory(
     query: str,
     type: str = "all",
@@ -111,32 +143,32 @@ def search_memory(
     if not results:
         return "No results found."
 
-    lines = [f"Found {len(results)} result(s):\n"]
+    lines = [f"Found {len(results)} result(s):"]
     for r in results:
         rtype = r["type"]
-        ts = r.get("timestamp", "")[:16].replace("T", " ")
+        ts = r.get("timestamp", "")[:10]
         if rtype == "execution":
-            lines.append(f"[{ts}] EXECUTION {r['tool_name']}: {r.get('file_path') or r.get('command', '')}")
+            target = r.get("file_path") or r.get("command", "")
+            lines.append(f"[{ts}] EXEC {r['tool_name']}: {target[:80]}")
         elif rtype == "conversation":
-            lines.append(f"[{ts}] CONVERSATION: {r['summary'][:100]}")
-            if r.get("key_decisions"):
-                for d in r["key_decisions"]:
-                    lines.append(f"  - Decision: {d}")
+            lines.append(f"[{ts}] TALK: {r['summary'][:120]}")
         elif rtype == "plan":
-            lines.append(f"[{ts}] PLAN [{r['plan_id']}]: {r['goal'][:100]}")
-            lines.append(f"  - {r['completed']} completed, {r['pending']} pending")
+            lines.append(f"[{ts}] PLAN [{r['plan_id']}]: {r['goal'][:80]} ({r['completed']}/{r['completed']+r['pending']})")
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-def get_resume_context() -> str:
+def get_resume_context(focus: str = "") -> str:
     """Get compressed context to resume a previous session.
 
     Call this at the start of a new session if .ahahooh/ exists in the project.
     Returns active plans, recent conversations, and recent execution records.
     Also rebuilds the index to ensure it's up-to-date (handles cases where the
     previous session was terminated by closing the terminal window).
+
+    Args:
+        focus: Optional keyword or plan_id to prioritize relevant results.
     """
     root = _get_root()
 
@@ -155,13 +187,13 @@ def get_resume_context() -> str:
     from .index import build_index
     build_index(root)
 
-    ctx = _get_resume_context(root)
+    ctx = _get_resume_context(root, focus=focus)
 
     return _format_resume_summary(ctx)
 
 
 def _format_resume_summary(ctx: dict) -> str:
-    """Format resume context with 1500-char hard limit."""
+    """Format resume context with dynamic char limit based on content blocks."""
     lines = []
 
     plans = ctx.get("active_plans", [])
@@ -169,7 +201,7 @@ def _format_resume_summary(ctx: dict) -> str:
         lines.append("Plans:")
         for p in plans:
             lines.append(
-                f"- {p['plan_id']}: \"{p['goal']}\""
+                f"- {p['plan_id']}: \"{p['goal'][:120]}\""
                 f" ({p['pending']} pending, {p['completed']} done)"
             )
 
@@ -178,45 +210,37 @@ def _format_resume_summary(ctx: dict) -> str:
         lines.append("Recent talks:")
         for c in convs[:3]:
             ts = c["timestamp"][:10]
-            summary = c["summary"]
-
-            # Extract structured parts from new format
-            intent = ""
-            result = ""
-            for part in summary.split(" | "):
-                if part.startswith("Intent: "):
-                    intent = part[8:]
-                elif part.startswith("Result: "):
-                    result = part[8:]
-
-            if intent:
-                line = f"- [{ts}] {intent[:150]}"
-                if result:
-                    line += f" => {result[:150]}"
-            else:
-                # Fallback for old format
-                line = f"- [{ts}] {summary[:200]}"
-
+            # Use summary_short when available for compact display
+            display = c.get("summary_short") or c.get("summary", "")
+            line = f"- [{ts}] {display[:150]}"
             decisions = ", ".join(c.get("key_decisions", []))
             if decisions:
-                line += f" -- decided: {decisions}"
+                line += f" -- decided: {decisions[:80]}"
             lines.append(line)
 
     records = ctx.get("recent_records", [])
     if records:
         lines.append("Recent actions:")
         for r in records:
-            desc = r.get("file_path") or r.get("command") or r.get("summary", "")
-            lines.append(f"- {r['tool_name']}: {desc}")
+            desc = r.get("file_path") or r.get("command") or ""
+            count = r.get("count", 1)
+            if count > 1:
+                lines.append(f"- {r['tool_name']}: {desc} ({count}x, last: {r.get('last_action', '')[:60]})")
+            else:
+                lines.append(f"- {r['tool_name']}: {desc}")
 
     if not lines:
         return "No previous session data found."
 
     text = "\n".join(lines)
 
-    # Hard limit at 1500 chars
-    if len(text) > 1500:
-        text = text[:1497] + "..."
+    # Dynamic limit: 200 per plan + 150 per conversation + 100 per record, max 3000
+    max_chars = min(
+        200 * len(plans) + 150 * len(convs[:3]) + 100 * len(records) + 200,
+        3000,
+    )
+    if len(text) > max_chars:
+        text = text[:max_chars - 3] + "..."
 
     return text
 

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT NOT NULL,
     summary TEXT NOT NULL,
+    summary_short TEXT DEFAULT '',
     key_decisions TEXT DEFAULT '[]',
     topics TEXT DEFAULT '[]',
     file_path TEXT NOT NULL,
@@ -56,20 +57,20 @@ CREATE TABLE IF NOT EXISTS plans (
     session_id TEXT DEFAULT ''
 );
 
--- FTS5 virtual tables
+-- FTS5 virtual tables (unicode61 tokenizer for CJK and better word boundary)
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_records USING fts5(
     timestamp, tool_name, file_path, command, input_summary, response_summary,
-    content=execution_records, content_rowid=id
+    content=execution_records, content_rowid=id, tokenize="unicode61 categories 'L* N* Co'"
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_conversations USING fts5(
     timestamp, summary, key_decisions, topics,
-    content=conversations, content_rowid=id
+    content=conversations, content_rowid=id, tokenize="unicode61 categories 'L* N* Co'"
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_plans USING fts5(
     plan_id, goal, tasks_json,
-    content=plans, content_rowid=id
+    content=plans, content_rowid=id, tokenize="unicode61 categories 'L* N* Co'"
 );
 
 -- Triggers to keep FTS in sync
@@ -130,12 +131,86 @@ def init_db(db_path: Path) -> None:
     """Initialize the database with schema."""
     conn = sqlite3.connect(str(db_path))
     conn.executescript(_SCHEMA)
+    # Migration: add summary_short column if missing
+    try:
+        conn.execute("SELECT summary_short FROM conversations LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE conversations ADD COLUMN summary_short TEXT DEFAULT ''")
+        rows = conn.execute("SELECT id, summary FROM conversations").fetchall()
+        for row in rows:
+            short = _make_short_summary(row[1])  # row[1] = summary
+            conn.execute("UPDATE conversations SET summary_short = ? WHERE id = ?", (short, row[0]))
+        conn.commit()
+    # Migration: rebuild FTS indexes if tokenizer changed (unicode61)
+    _rebuild_fts_if_needed(conn)
     conn.close()
+
+
+def _rebuild_fts_if_needed(conn: sqlite3.Connection) -> None:
+    """Rebuild FTS virtual tables to apply new tokenizer settings.
+
+    Checks if the existing FTS tables use the new unicode61 tokenizer.
+    If not, drops and recreates them (content is re-synced via triggers).
+    """
+    for table in ("fts_records", "fts_conversations", "fts_plans"):
+        try:
+            # Check if table exists and has the new tokenizer
+            schema = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()
+            if schema and "unicode61" not in (schema[0] or ""):
+                # Rebuild: drop and recreate, then re-populate
+                conn.execute(f"DROP TABLE IF EXISTS {table}")
+                conn.commit()
+        except sqlite3.OperationalError:
+            pass
+    # Re-run schema to recreate any dropped FTS tables
+    conn.executescript(_SCHEMA)
+
+    # Re-populate FTS from base tables
+    for base, fts, cols in [
+        ("execution_records", "fts_records",
+         "timestamp, tool_name, file_path, command, input_summary, response_summary"),
+        ("conversations", "fts_conversations",
+         "timestamp, summary, key_decisions, topics"),
+        ("plans", "fts_plans",
+         "plan_id, goal, tasks_json"),
+    ]:
+        try:
+            # Check if FTS table is empty
+            count = conn.execute(f"SELECT count(*) FROM {fts}").fetchone()[0]
+            base_count = conn.execute(f"SELECT count(*) FROM {base}").fetchone()[0]
+            if count < base_count:
+                conn.execute(f"INSERT INTO {fts}({fts}) VALUES ('rebuild')")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+
+
+def _make_short_summary(summary: str, max_len: int = 150) -> str:
+    """Extract a short version of a structured summary for compact display."""
+    if not summary:
+        return ""
+    # Extract Intent and Result from structured format
+    intent = ""
+    result = ""
+    for part in summary.split(" | "):
+        if part.startswith("Intent: "):
+            intent = part[8:]
+        elif part.startswith("Result: "):
+            result = part[8:]
+    if intent:
+        short = intent
+        if result:
+            short += f" => {result}"
+        return short[:max_len]
+    # Fallback: plain truncation
+    return summary[:max_len]
 
 
 def _get_conn(project_root: Path) -> sqlite3.Connection:
     db_path = config.get_db_path(project_root)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=3)
     conn.row_factory = sqlite3.Row
     # Ensure schema exists (idempotent via IF NOT EXISTS)
     conn.executescript(_SCHEMA)
@@ -154,17 +229,27 @@ def save_execution_record(
     input_summary: str = "",
     response_summary: str = "",
     session_id: str = "",
+    full_input: str = "",
+    full_response: str = "",
 ) -> str:
-    """Save an execution record to markdown file and SQLite."""
+    """Save an execution record to markdown file and SQLite.
+
+    Args:
+        input_summary/response_summary: truncated text for SQLite/FTS (token-efficient)
+        full_input/full_response: complete content for Markdown file (full fidelity)
+    """
     ts = _now_iso()
     short = _short_ts()
 
-    # Build markdown content
+    # Build markdown content (uses full content for completeness)
     slug = tool_name.lower()
     filename = f"{short}_{slug}.md"
     records_dir = config.get_records_dir(project_root)
     records_dir.mkdir(parents=True, exist_ok=True)
     record_path = records_dir / filename
+
+    md_input = full_input or input_summary
+    md_response = full_response or response_summary
 
     md_lines = [
         f"# Execution Record: {tool_name}",
@@ -179,15 +264,15 @@ def save_execution_record(
     if session_id:
         md_lines.append(f"- **Session**: {session_id}")
     md_lines.append("")
-    if input_summary:
+    if md_input:
         md_lines.append("## Input")
         md_lines.append("")
-        md_lines.append(input_summary)
+        md_lines.append(md_input)
         md_lines.append("")
-    if response_summary:
+    if md_response:
         md_lines.append("## Response")
         md_lines.append("")
-        md_lines.append(response_summary)
+        md_lines.append(md_response)
         md_lines.append("")
 
     record_path.write_text("\n".join(md_lines), encoding="utf-8")
@@ -218,6 +303,7 @@ def save_conversation(
     key_decisions: list[str] | None = None,
     topics: list[str] | None = None,
     session_id: str = "",
+    summary_short: str = "",
 ) -> str:
     """Save a conversation summary to markdown file and SQLite."""
     ts = _now_iso()
@@ -225,6 +311,8 @@ def save_conversation(
 
     key_decisions = key_decisions or []
     topics = topics or []
+    if not summary_short:
+        summary_short = _make_short_summary(summary)
 
     filename = f"{short}_conversation.md"
     conv_dir = config.get_conversations_dir(project_root)
@@ -264,9 +352,9 @@ def save_conversation(
     try:
         conn.execute(
             """INSERT INTO conversations
-               (timestamp, summary, key_decisions, topics, file_path, session_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (ts, summary, json.dumps(key_decisions), json.dumps(topics), filename, session_id),
+               (timestamp, summary, summary_short, key_decisions, topics, file_path, session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (ts, summary, summary_short, json.dumps(key_decisions), json.dumps(topics), filename, session_id),
         )
         conn.commit()
     finally:
@@ -324,11 +412,12 @@ def update_conversation_by_session(
             conv_path.write_text("\n".join(md_lines), encoding="utf-8")
 
         # Update DB row (triggers conv_au keep FTS in sync)
+        summary_short = _make_short_summary(summary)
         conn.execute(
             """UPDATE conversations
-               SET timestamp=?, summary=?, topics=?
+               SET timestamp=?, summary=?, summary_short=?, topics=?
                WHERE id=?""",
-            (ts, summary, json.dumps(topics), row_id),
+            (ts, summary, summary_short, json.dumps(topics), row_id),
         )
         conn.commit()
         return True
@@ -478,15 +567,39 @@ def search(
     record_type: str = "all",
     limit: int = 10,
 ) -> list[dict]:
-    """Search across records using FTS5."""
+    """Search across records using FTS5 with OR fallback."""
     conn = _get_conn(project_root)
     results = []
 
     try:
-        # Escape double quotes in query for FTS5
+        # Try exact phrase match first
         safe_query = query.replace('"', '""')
+        fts_query = f'"{safe_query}"'
 
-        if record_type in ("all", "execution"):
+        results = _do_fts_search(conn, fts_query, record_type, limit)
+
+        # Fallback: if no results, try OR search with individual words
+        if not results:
+            words = query.strip().split()
+            if len(words) > 1:
+                or_parts = [w.replace('"', '""') for w in words if len(w) >= 2]
+                if or_parts:
+                    fts_query = " OR ".join(f'"{w}"' for w in or_parts)
+                    results = _do_fts_search(conn, fts_query, record_type, limit)
+    finally:
+        conn.close()
+
+    # Sort all results by timestamp descending
+    results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    return results[:limit]
+
+
+def _do_fts_search(conn, fts_query: str, record_type: str, limit: int) -> list[dict]:
+    """Execute FTS search across tables with a given FTS query string."""
+    results = []
+
+    if record_type in ("all", "execution"):
+        try:
             rows = conn.execute(
                 """SELECT r.id, r.timestamp, r.tool_name, r.file_path, r.command,
                           r.input_summary, r.response_summary, r.record_file
@@ -494,7 +607,7 @@ def search(
                    JOIN execution_records r ON r.id = f.rowid
                    WHERE fts_records MATCH ?
                    ORDER BY r.timestamp DESC LIMIT ?""",
-                (f'"{safe_query}"', limit),
+                (fts_query, limit),
             ).fetchall()
             for r in rows:
                 results.append({
@@ -503,37 +616,43 @@ def search(
                     "tool_name": r["tool_name"],
                     "file_path": r["file_path"],
                     "command": r["command"],
-                    "summary": r["input_summary"] or r["response_summary"],
+                    "summary": (r["input_summary"] or r["response_summary"])[:100],
                     "record_file": r["record_file"],
                 })
+        except sqlite3.OperationalError:
+            pass
 
-        if record_type in ("all", "conversation"):
+    if record_type in ("all", "conversation"):
+        try:
             rows = conn.execute(
-                """SELECT c.id, c.timestamp, c.summary, c.key_decisions, c.topics, c.file_path
+                """SELECT c.id, c.timestamp, c.summary, c.summary_short, c.key_decisions, c.topics, c.file_path
                    FROM fts_conversations f
                    JOIN conversations c ON c.id = f.rowid
                    WHERE fts_conversations MATCH ?
                    ORDER BY c.timestamp DESC LIMIT ?""",
-                (f'"{safe_query}"', limit),
+                (fts_query, limit),
             ).fetchall()
             for r in rows:
                 results.append({
                     "type": "conversation",
                     "timestamp": r["timestamp"],
-                    "summary": r["summary"],
+                    "summary": (r["summary_short"] or r["summary"])[:100],
                     "key_decisions": json.loads(r["key_decisions"]),
                     "topics": json.loads(r["topics"]),
                     "file_path": r["file_path"],
                 })
+        except sqlite3.OperationalError:
+            pass
 
-        if record_type in ("all", "plan"):
+    if record_type in ("all", "plan"):
+        try:
             rows = conn.execute(
                 """SELECT p.id, p.plan_id, p.timestamp, p.goal, p.tasks_json, p.file_path
                    FROM fts_plans f
                    JOIN plans p ON p.id = f.rowid
                    WHERE fts_plans MATCH ?
                    ORDER BY p.timestamp DESC LIMIT ?""",
-                (f'"{safe_query}"', limit),
+                (fts_query, limit),
             ).fetchall()
             for r in rows:
                 tasks = json.loads(r["tasks_json"])
@@ -548,20 +667,22 @@ def search(
                     "pending": pending,
                     "file_path": r["file_path"],
                 })
-    finally:
-        conn.close()
+        except sqlite3.OperationalError:
+            pass
 
-    # Sort all results by timestamp descending
-    results.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
-    return results[:limit]
+    return results
 
 
 # ---------------------------------------------------------------------------
 # Resume context
 # ---------------------------------------------------------------------------
 
-def get_resume_context(project_root: Path) -> dict:
-    """Get context for resuming a session."""
+def get_resume_context(project_root: Path, focus: str = "") -> dict:
+    """Get context for resuming a session.
+
+    Args:
+        focus: Optional keyword or plan_id to prioritize relevant results.
+    """
     conn = _get_conn(project_root)
     try:
         # Active plans
@@ -585,46 +706,67 @@ def get_resume_context(project_root: Path) -> dict:
                     "file_path": p["file_path"],
                 })
 
-        # Recent conversations
+        # Recent conversations - use summary_short when available
         convs = conn.execute(
-            """SELECT timestamp, summary, key_decisions, topics, file_path
+            """SELECT timestamp, summary, summary_short, key_decisions, topics, file_path
                FROM conversations ORDER BY timestamp DESC LIMIT 5"""
         ).fetchall()
 
         recent_conversations = []
+        focus_lower = focus.lower() if focus else ""
         for c in convs:
-            recent_conversations.append({
+            conv_dict = {
                 "timestamp": c["timestamp"],
                 "summary": c["summary"],
+                "summary_short": c["summary_short"] if c["summary_short"] else _make_short_summary(c["summary"]),
                 "key_decisions": json.loads(c["key_decisions"]),
                 "topics": json.loads(c["topics"]),
                 "file_path": c["file_path"],
-            })
+                "relevance": 0,
+            }
+            # Compute relevance score if focus is set
+            if focus_lower:
+                text = (c["summary"] + " " + c["topics"]).lower()
+                conv_dict["relevance"] = text.count(focus_lower)
+            recent_conversations.append(conv_dict)
 
-        # Recent execution records (5, deduplicated by tool+file/command)
+        # Sort by relevance (if focus) then by timestamp
+        if focus_lower:
+            recent_conversations.sort(key=lambda x: (-x["relevance"], x["timestamp"]), reverse=False)
+            # Re-sort: high relevance first, then recent
+            recent_conversations.sort(key=lambda x: (x["relevance"], x["timestamp"]), reverse=True)
+
+        # Recent execution records grouped by target file/command
         records = conn.execute(
             """SELECT timestamp, tool_name, file_path, command, input_summary, response_summary, record_file
-               FROM execution_records ORDER BY timestamp DESC LIMIT 20"""
+               FROM execution_records ORDER BY timestamp DESC LIMIT 50"""
         ).fetchall()
 
-        seen = set()
-        recent_records = []
+        # Group by (tool_name, target) and count edits
+        grouped: dict[str, dict] = {}
         for r in records:
-            desc = r["file_path"] or r["command"] or ""
-            key = f"{r['tool_name']}:{desc}"
-            if key in seen:
-                continue
-            seen.add(key)
-            recent_records.append({
-                "timestamp": r["timestamp"],
-                "tool_name": r["tool_name"],
-                "file_path": r["file_path"],
-                "command": r["command"],
-                "summary": r["input_summary"] or r["response_summary"],
-                "record_file": r["record_file"],
-            })
-            if len(recent_records) >= 5:
-                break
+            target = r["file_path"] or r["command"] or ""
+            key = f"{r['tool_name']}:{target}"
+            if key not in grouped:
+                summary = r["input_summary"] or r["response_summary"] or ""
+                # Extract last action description
+                last_action = summary[:100] if summary else target
+                grouped[key] = {
+                    "timestamp": r["timestamp"],
+                    "tool_name": r["tool_name"],
+                    "file_path": r["file_path"],
+                    "command": r["command"],
+                    "count": 1,
+                    "last_action": last_action,
+                }
+            else:
+                grouped[key]["count"] += 1
+                grouped[key]["timestamp"] = r["timestamp"]
+
+        # Take top 5 groups by most recent timestamp
+        recent_records = sorted(
+            grouped.values(), key=lambda x: x["timestamp"], reverse=True
+        )[:5]
 
         return {
             "active_plans": active_plans,

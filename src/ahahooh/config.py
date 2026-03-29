@@ -16,6 +16,16 @@ SETTINGS_LOCAL = "settings.local.json"
 MCP_JSON = ".mcp.json"
 COMMANDS_DIR = "commands"
 
+# Bash commands to skip recording (read-only queries that add no value)
+BASH_SKIP_COMMANDS = frozenset({
+    "git status", "git log", "git branch", "git remote", "git tag",
+    "ls", "ll", "dir", "pwd", "echo", "cat", "head", "tail",
+    "which", "where", "whoami", "hostname", "uname",
+    "node --version", "node -v", "python --version", "python -V",
+    "npm --version", "npm -v", "pip --version",
+    "git --version", "docker --version",
+})
+
 
 def find_project_root(start: Path | None = None) -> Path | None:
     """Walk up from start directory to find project root with .ahahooh."""
