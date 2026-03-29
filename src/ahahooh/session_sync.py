@@ -79,6 +79,20 @@ def _extract_text(content) -> str:
     return str(content) if content else ""
 
 
+def _tail_sentences(text: str, max_chars: int = 300) -> str:
+    """Extract the concluding portion of text, trying to start at a sentence boundary."""
+    if len(text) <= max_chars:
+        return text
+    tail = text[-max_chars:]
+    # Try to cut at a paragraph or sentence break in the first half
+    for sep in ("\n\n", ". ", "。", "! ", "? "):
+        idx = tail.find(sep)
+        if 0 < idx < len(tail) // 2:
+            tail = tail[idx + len(sep):]
+            break
+    return tail.strip()
+
+
 def parse_session(jsonl_path: Path) -> dict | None:
     """Parse one session JSONL. Returns dict with messages or None."""
     user_msgs = []
@@ -102,7 +116,7 @@ def parse_session(jsonl_path: Path) -> dict | None:
                     msg = data.get("message", {})
                     content = _extract_text(msg.get("content", ""))
                     if content and not content.startswith('[{"tool_use_id"'):
-                        user_msgs.append(content[:200])
+                        user_msgs.append(content[:500])
                     if not session_id:
                         session_id = data.get("sessionId", "")
                     if not first_ts:
@@ -112,7 +126,7 @@ def parse_session(jsonl_path: Path) -> dict | None:
                     msg = data.get("message", {})
                     content = _extract_text(msg.get("content", ""))
                     if content:
-                        assistant_msgs.append(content[:300])
+                        assistant_msgs.append(_tail_sentences(content))
                     if not session_id:
                         session_id = data.get("sessionId", jsonl_path.stem)
 
@@ -131,13 +145,16 @@ def parse_session(jsonl_path: Path) -> dict | None:
 
 
 def build_summary(parsed: dict) -> str:
-    """Build a one-line summary from parsed session."""
+    """Build a summary from parsed session.
+
+    Keeps all user messages (they're short and represent intent).
+    Each assistant reply is already tail-extracted by _tail_sentences.
+    """
     parts = []
     if parsed["user_messages"]:
-        parts.append(f"User: {parsed['user_messages'][0]}")
+        parts.append("User: " + " | ".join(parsed["user_messages"]))
     if parsed["assistant_messages"]:
-        # Last assistant msg usually summarizes the session
-        parts.append(f"Result: {parsed['assistant_messages'][-1]}")
+        parts.append("Result: " + " | ".join(parsed["assistant_messages"]))
     return " | ".join(parts) if parts else ""
 
 
